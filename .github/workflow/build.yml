@@ -1,0 +1,39 @@
+name: Build and Sign AUR Repo
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to upload to Releases
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and Sign
+        uses: 2m/arch-pkgbuild-builder@v1.16
+        with:
+          target-aur-packages: |
+            llama.cpp-vulkan
+            llama.cpp-hip
+          repository-name: teoulas
+          # Use Releases instead of Pages
+          with-files: true
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: ${{ secrets.GPG_PASSPHRASE }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: repository
+          files: |
+            *.pkg.tar.zst
+            *.pkg.tar.zst.sig
+            myrepo.db*
+            myrepo.files*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
