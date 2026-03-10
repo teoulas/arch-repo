@@ -5,12 +5,27 @@ on:
   workflow_dispatch:
 
 jobs:
+  packages:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          echo "matrix=$(grep -v '^#' packages.txt | grep -v '^$' | jq -R -s -c 'split("\n") | map(select(. != ""))')" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: packages
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.packages.outputs.matrix) }}
     steps:
       - name: Setup build environment
         run: |
@@ -43,65 +58,97 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /home/builder/.cache/ccache
-          key: ccache-${{ github.run_id }}
-          restore-keys: ccache-
+          key: ccache-${{ matrix.package }}-${{ github.run_id }}
+          restore-keys: ccache-${{ matrix.package }}-
 
       - name: Initialize ccache directory
         run: |
           mkdir -p /home/builder/.cache/ccache
           chown -R builder:builder /home/builder/.cache/ccache
 
-      - name: Get current release versions
-        id: current
+      - name: Check if build is needed
+        id: check
         run: |
-          # Fetch version info from the latest release
-          for pkg in $(grep -v '^#' packages.txt | grep -v '^$'); do
-            ver=$(gh release view repository --json assets --jq \
-              ".assets[].name | select(startswith(\"${pkg}-\")) | select(endswith(\".pkg.tar.zst\"))" 2>/dev/null \
-              | head -1 || echo "")
-            echo "${pkg}=${ver}" >> "$GITHUB_OUTPUT"
-          done
+          su builder -c "git clone --depth 1 https://aur.archlinux.org/${{ matrix.package }}.git /tmp/${{ matrix.package }}"
+          aur_ver=$(su builder -c "cd /tmp/${{ matrix.package }} && source PKGBUILD && echo \${epoch:+\${epoch}:}\${pkgver}-\${pkgrel}")
+          echo "version=${aur_ver}" >> "$GITHUB_OUTPUT"
+
+          current=$(gh release view repository --json assets --jq \
+            ".assets[].name | select(startswith(\"${{ matrix.package }}-\")) | select(endswith(\".pkg.tar.zst\"))" 2>/dev/null \
+            | head -1 || echo "")
+
+          if echo "$current" | grep -qF "${{ matrix.package }}-${aur_ver}"; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping ${{ matrix.package }}: version ${aur_ver} already built"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "Will build ${{ matrix.package }} version ${aur_ver}"
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build AUR packages
-        id: build
+      - name: Build package
+        if: steps.check.outputs.needed == 'true'
         run: |
-          built=0
-          for pkg in $(grep -v '^#' packages.txt | grep -v '^$'); do
-            # Clone fresh PKGBUILD from AUR
-            su builder -c "git clone --depth 1 https://aur.archlinux.org/${pkg}.git /tmp/${pkg}"
+          su builder -c "cd /tmp/${{ matrix.package }} && makepkg -s --noconfirm"
 
-            # Extract version from PKGBUILD
-            aur_ver=$(su builder -c "cd /tmp/${pkg} && source PKGBUILD && echo \${epoch:+\${epoch}:}\${pkgver}-\${pkgrel}")
-
-            # Check if this version is already in the release
-            current_file="${{ steps.current.outputs[format('{0}', pkg)] }}"
-            if echo "$current_file" | grep -qF "${pkg}-${aur_ver}"; then
-              echo "Skipping ${pkg}: version ${aur_ver} already built"
-              continue
-            fi
-
-            echo "Building ${pkg} version ${aur_ver}"
-            su builder -c "cd /tmp/${pkg} && makepkg -s --noconfirm"
-            cp /tmp/${pkg}/*.pkg.tar.zst .
-            built=$((built + 1))
-          done
-
-          echo "built=${built}" >> "$GITHUB_OUTPUT"
-
-      - name: Sign packages
-        if: steps.build.outputs.built != '0'
+      - name: Sign package
+        if: steps.check.outputs.needed == 'true'
         run: |
-          for f in *.pkg.tar.zst; do
+          for f in /tmp/${{ matrix.package }}/*.pkg.tar.zst; do
             gpg --batch --yes --pinentry-mode loopback \
               --passphrase '${{ secrets.GPG_PASSPHRASE }}' \
               --detach-sign "$f"
           done
 
-      - name: Create repo database
-        if: steps.build.outputs.built != '0'
+      - name: Upload artifact
+        if: steps.check.outputs.needed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.package }}
+          path: |
+            /tmp/${{ matrix.package }}/*.pkg.tar.zst
+            /tmp/${{ matrix.package }}/*.pkg.tar.zst.sig
+
+      - name: Print ccache stats
+        if: always()
         run: |
+          su builder -c "ccache -s"
+
+  release:
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    permissions:
+      contents: write
+    steps:
+      - name: Install tools
+        run: |
+          pacman -Syu --noconfirm gnupg
+
+      - name: Import GPG key
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Download all package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pkg-*
+          merge-multiple: true
+          path: packages/
+
+      - name: Create repo database
+        run: |
+          cd packages/
+          # Check if any packages were built
+          if ! ls *.pkg.tar.zst 1>/dev/null 2>&1; then
+            echo "No packages to release"
+            exit 0
+          fi
           repo-add --sign --key "$(gpg --list-secret-keys --keyid-format long | grep sec | awk '{print $2}' | cut -d/ -f2)" \
             teoulas.db.tar.gz *.pkg.tar.zst
           ln -sf teoulas.db.tar.gz teoulas.db
@@ -110,17 +157,11 @@ jobs:
           ln -sf teoulas.files.tar.gz.sig teoulas.files.sig
 
       - name: Upload to Release
-        if: steps.build.outputs.built != '0'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: repository
           files: |
-            *.pkg.tar.zst
-            *.pkg.tar.zst.sig
-            teoulas.db*
-            teoulas.files*
-
-      - name: Print ccache stats
-        if: always()
-        run: |
-          su builder -c "ccache -s"
+            packages/*.pkg.tar.zst
+            packages/*.pkg.tar.zst.sig
+            packages/teoulas.db*
+            packages/teoulas.files*
