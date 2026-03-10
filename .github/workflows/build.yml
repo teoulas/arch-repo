@@ -7,32 +7,63 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
     permissions:
-      contents: write # Required to upload to Releases
+      contents: write
     steps:
+      - name: Setup build environment
+        run: |
+          pacman -Syu --noconfirm git gnupg
+
       - uses: actions/checkout@v4
 
-      - name: Build AUR Packages
-        uses: repolib/action-aur@v1
-        with:
-          # This action understands AUR names directly
-          aur_packages: |
-            llama.cpp-vulkan
-            llama.cpp-hip
-          repo_name: teoulas
-          # Signing configuration
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          gpg_passphrase: ${{ secrets.GPG_PASSPHRASE }}
-        # The GITHUB_TOKEN is needed to fetch from AUR and prepare files
+      - name: Create build user
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+
+      - name: Import GPG key
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Build AUR packages
+        run: |
+          for pkg in llama.cpp-vulkan llama.cpp-hip; do
+            su builder -c "
+              cd /tmp
+              git clone https://aur.archlinux.org/${pkg}.git
+              cd ${pkg}
+              makepkg -s --noconfirm
+            "
+            cp /tmp/${pkg}/*.pkg.tar.zst .
+          done
+
+      - name: Sign packages
+        run: |
+          for f in *.pkg.tar.zst; do
+            gpg --batch --yes --pinentry-mode loopback \
+              --passphrase '${{ secrets.GPG_PASSPHRASE }}' \
+              --detach-sign "$f"
+          done
+
+      - name: Create repo database
+        run: |
+          repo-add --sign --key "$(gpg --list-secret-keys --keyid-format long | grep sec | awk '{print $2}' | cut -d/ -f2)" \
+            teoulas.db.tar.gz *.pkg.tar.zst
+          # repo-add creates .db.tar.gz and .files.tar.gz; create symlinks
+          ln -sf teoulas.db.tar.gz teoulas.db
+          ln -sf teoulas.db.tar.gz.sig teoulas.db.sig
+          ln -sf teoulas.files.tar.gz teoulas.files
+          ln -sf teoulas.files.tar.gz.sig teoulas.files.sig
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         if: success()
         with:
           tag_name: repository
-          # Note: this action puts files in the workspace root
           files: |
             *.pkg.tar.zst
             *.pkg.tar.zst.sig
