@@ -29,6 +29,9 @@ jobs:
           sed -i "s/#MAKEFLAGS=.*/MAKEFLAGS=\"-j$(nproc)\"/" /etc/makepkg.conf
           # Enable ccache
           sed -i 's/!ccache/ccache/' /etc/makepkg.conf
+          # Optimize for Alder Lake (i7-12700)
+          sed -i 's/-march=x86-64/-march=alderlake/' /etc/makepkg.conf
+          sed -i 's/-mtune=generic/-mtune=alderlake/' /etc/makepkg.conf
 
       - name: Import GPG key
         run: |
