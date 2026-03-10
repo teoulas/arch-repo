@@ -14,7 +14,7 @@ jobs:
     steps:
       - name: Setup build environment
         run: |
-          pacman -Syu --noconfirm git gnupg
+          pacman -Syu --noconfirm git gnupg ccache github-cli
 
       - uses: actions/checkout@v4
 
@@ -23,25 +23,72 @@ jobs:
           useradd -m builder
           echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
 
+      - name: Configure makepkg
+        run: |
+          # Use all available cores
+          sed -i "s/#MAKEFLAGS=.*/MAKEFLAGS=\"-j$(nproc)\"/" /etc/makepkg.conf
+          # Enable ccache
+          sed -i 's/!ccache/ccache/' /etc/makepkg.conf
+
       - name: Import GPG key
         run: |
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
-      - name: Build AUR packages
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: /home/builder/.cache/ccache
+          key: ccache-${{ github.run_id }}
+          restore-keys: ccache-
+
+      - name: Initialize ccache directory
         run: |
-          for pkg in llama.cpp-vulkan llama.cpp-hip; do
-            su builder -c "
-              cd /tmp
-              git clone https://aur.archlinux.org/${pkg}.git
-              cd ${pkg}
-              makepkg -s --noconfirm
-            "
+          mkdir -p /home/builder/.cache/ccache
+          chown -R builder:builder /home/builder/.cache/ccache
+
+      - name: Get current release versions
+        id: current
+        run: |
+          # Fetch version info from the latest release
+          for pkg in $(grep -v '^#' packages.txt | grep -v '^$'); do
+            ver=$(gh release view repository --json assets --jq \
+              ".assets[].name | select(startswith(\"${pkg}-\")) | select(endswith(\".pkg.tar.zst\"))" 2>/dev/null \
+              | head -1 || echo "")
+            echo "${pkg}=${ver}" >> "$GITHUB_OUTPUT"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build AUR packages
+        id: build
+        run: |
+          built=0
+          for pkg in $(grep -v '^#' packages.txt | grep -v '^$'); do
+            # Clone fresh PKGBUILD from AUR
+            su builder -c "git clone --depth 1 https://aur.archlinux.org/${pkg}.git /tmp/${pkg}"
+
+            # Extract version from PKGBUILD
+            aur_ver=$(su builder -c "cd /tmp/${pkg} && source PKGBUILD && echo \${epoch:+\${epoch}:}\${pkgver}-\${pkgrel}")
+
+            # Check if this version is already in the release
+            current_file="${{ steps.current.outputs[format('{0}', pkg)] }}"
+            if echo "$current_file" | grep -qF "${pkg}-${aur_ver}"; then
+              echo "Skipping ${pkg}: version ${aur_ver} already built"
+              continue
+            fi
+
+            echo "Building ${pkg} version ${aur_ver}"
+            su builder -c "cd /tmp/${pkg} && makepkg -s --noconfirm"
             cp /tmp/${pkg}/*.pkg.tar.zst .
+            built=$((built + 1))
           done
 
+          echo "built=${built}" >> "$GITHUB_OUTPUT"
+
       - name: Sign packages
+        if: steps.build.outputs.built != '0'
         run: |
           for f in *.pkg.tar.zst; do
             gpg --batch --yes --pinentry-mode loopback \
@@ -50,18 +97,18 @@ jobs:
           done
 
       - name: Create repo database
+        if: steps.build.outputs.built != '0'
         run: |
           repo-add --sign --key "$(gpg --list-secret-keys --keyid-format long | grep sec | awk '{print $2}' | cut -d/ -f2)" \
             teoulas.db.tar.gz *.pkg.tar.zst
-          # repo-add creates .db.tar.gz and .files.tar.gz; create symlinks
           ln -sf teoulas.db.tar.gz teoulas.db
           ln -sf teoulas.db.tar.gz.sig teoulas.db.sig
           ln -sf teoulas.files.tar.gz teoulas.files
           ln -sf teoulas.files.tar.gz.sig teoulas.files.sig
 
       - name: Upload to Release
+        if: steps.build.outputs.built != '0'
         uses: softprops/action-gh-release@v2
-        if: success()
         with:
           tag_name: repository
           files: |
@@ -69,3 +116,8 @@ jobs:
             *.pkg.tar.zst.sig
             teoulas.db*
             teoulas.files*
+
+      - name: Print ccache stats
+        if: always()
+        run: |
+          su builder -c "ccache -s"
