@@ -132,10 +132,10 @@ jobs:
         run: |
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
           echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
-          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
           gpg-connect-agent reloadagent /bye 2>/dev/null || true
-          KEY_GRIP=$(gpg --list-secret-keys --with-keygrip | grep Keygrip | head -1 | awk '{print $3}')
-          /usr/lib/gnupg/gpg-preset-passphrase --preset --passphrase "$GPG_PASSPHRASE" "$KEY_GRIP"
+          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+          echo "passphrase-file /tmp/.gpg_passphrase" >> ~/.gnupg/gpg.conf
+          echo -n "$GPG_PASSPHRASE" > /tmp/.gpg_passphrase
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
