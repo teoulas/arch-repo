@@ -76,13 +76,9 @@ jobs:
           aur_ver=$(su builder -c "cd /tmp/${{ matrix.package }} && source PKGBUILD && echo \${epoch:+\${epoch}:}\${pkgver}-\${pkgrel}")
           echo "version=${aur_ver}" >> "$GITHUB_OUTPUT"
 
-          echo "Checking release assets..."
           all_assets=$(gh release view repository --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>&1) || true
-          echo "Assets found: ${all_assets}"
-          current=$(echo "$all_assets" | grep '^${{ matrix.package }}-' | grep '\.pkg\.tar\.zst$' | head -1 || echo "")
-          echo "Matched: ${current}"
 
-          if echo "$current" | grep -qF "${{ matrix.package }}-${aur_ver}"; then
+          if echo "$all_assets" | grep -qF "${{ matrix.package }}-${aur_ver}-"; then
             echo "needed=false" >> "$GITHUB_OUTPUT"
             echo "Skipping ${{ matrix.package }}: version ${aur_ver} already built"
           else
