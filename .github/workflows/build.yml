@@ -4,6 +4,9 @@ on:
     - cron: '0 0 * * *'
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   packages:
     runs-on: ubuntu-latest
@@ -73,8 +76,8 @@ jobs:
           aur_ver=$(su builder -c "cd /tmp/${{ matrix.package }} && source PKGBUILD && echo \${epoch:+\${epoch}:}\${pkgver}-\${pkgrel}")
           echo "version=${aur_ver}" >> "$GITHUB_OUTPUT"
 
-          current=$(gh release view repository --json assets --jq \
-            ".assets[].name | select(startswith(\"${{ matrix.package }}-\")) | select(endswith(\".pkg.tar.zst\"))" 2>/dev/null \
+          current=$(gh release view repository --repo "$GITHUB_REPOSITORY" --json assets --jq \
+            ".assets[].name | select(startswith(\"${{ matrix.package }}-\")) | select(endswith(\".pkg.tar.zst\"))" \
             | head -1 || echo "")
 
           if echo "$current" | grep -qF "${{ matrix.package }}-${aur_ver}"; then
