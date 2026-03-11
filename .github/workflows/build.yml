@@ -41,34 +41,6 @@ jobs:
           useradd -m builder
           echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
 
-      - name: Configure makepkg
-        run: |
-          # Use all available cores
-          sed -i "s/#MAKEFLAGS=.*/MAKEFLAGS=\"-j$(nproc)\"/" /etc/makepkg.conf
-          # Enable ccache
-          sed -i 's/!ccache/ccache/' /etc/makepkg.conf
-          # Optimize for Alder Lake (i7-12700)
-          sed -i 's/-march=x86-64/-march=alderlake/' /etc/makepkg.conf
-          sed -i 's/-mtune=generic/-mtune=alderlake/' /etc/makepkg.conf
-
-      - name: Import GPG key
-        run: |
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
-        env:
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: /home/builder/.cache/ccache
-          key: ccache-${{ matrix.package }}-${{ github.run_id }}
-          restore-keys: ccache-${{ matrix.package }}-
-
-      - name: Initialize ccache directory
-        run: |
-          mkdir -p /home/builder/.cache/ccache
-          chown -R builder:builder /home/builder/.cache/ccache
-
       - name: Check if build is needed
         id: check
         run: |
@@ -87,6 +59,38 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure makepkg
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          # Use all available cores
+          sed -i "s/#MAKEFLAGS=.*/MAKEFLAGS=\"-j$(nproc)\"/" /etc/makepkg.conf
+          # Enable ccache
+          sed -i 's/!ccache/ccache/' /etc/makepkg.conf
+          # Optimize for Alder Lake (i7-12700)
+          sed -i 's/-march=x86-64/-march=alderlake/' /etc/makepkg.conf
+          sed -i 's/-mtune=generic/-mtune=alderlake/' /etc/makepkg.conf
+
+      - name: Import GPG key
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Restore ccache
+        if: steps.check.outputs.needed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: /home/builder/.cache/ccache
+          key: ccache-${{ matrix.package }}-${{ github.run_id }}
+          restore-keys: ccache-${{ matrix.package }}-
+
+      - name: Initialize ccache directory
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          mkdir -p /home/builder/.cache/ccache
+          chown -R builder:builder /home/builder/.cache/ccache
 
       - name: Build package
         if: steps.check.outputs.needed == 'true'
@@ -112,7 +116,7 @@ jobs:
             /tmp/${{ matrix.package }}/*.pkg.tar.zst.sig
 
       - name: Print ccache stats
-        if: always()
+        if: always() && steps.check.outputs.needed == 'true'
         run: |
           su builder -c "ccache -s"
 
@@ -149,12 +153,12 @@ jobs:
 
       - name: Create repo database
         run: |
-          cd packages/
           # Check if any packages were built
-          if ! ls *.pkg.tar.zst 1>/dev/null 2>&1; then
+          if [ ! -d packages ] || ! ls packages/*.pkg.tar.zst 1>/dev/null 2>&1; then
             echo "No packages to release"
             exit 0
           fi
+          cd packages/
           repo-add --sign --key "$(gpg --list-secret-keys --keyid-format long | grep sec | awk '{print $2}' | cut -d/ -f2)" \
             teoulas.db.tar.gz *.pkg.tar.zst
           cp teoulas.db.tar.gz teoulas.db
