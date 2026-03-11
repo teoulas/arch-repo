@@ -126,7 +126,7 @@ jobs:
     steps:
       - name: Install tools
         run: |
-          pacman -Syu --noconfirm gnupg
+          pacman -Syu --noconfirm gnupg github-cli jq
 
       - name: Import GPG key
         run: |
@@ -156,10 +156,10 @@ jobs:
           fi
           repo-add --sign --key "$(gpg --list-secret-keys --keyid-format long | grep sec | awk '{print $2}' | cut -d/ -f2)" \
             teoulas.db.tar.gz *.pkg.tar.zst
-          ln -sf teoulas.db.tar.gz teoulas.db
-          ln -sf teoulas.db.tar.gz.sig teoulas.db.sig
-          ln -sf teoulas.files.tar.gz teoulas.files
-          ln -sf teoulas.files.tar.gz.sig teoulas.files.sig
+          cp teoulas.db.tar.gz teoulas.db
+          cp teoulas.db.tar.gz.sig teoulas.db.sig
+          cp teoulas.files.tar.gz teoulas.files
+          cp teoulas.files.tar.gz.sig teoulas.files.sig
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
@@ -170,3 +170,23 @@ jobs:
             packages/*.pkg.tar.zst.sig
             packages/teoulas.db*
             packages/teoulas.files*
+
+      - name: Clean up old package versions
+        run: |
+          # For each package, keep only the latest version and remove older ones
+          gh release view repository --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | \
+            grep '\.pkg\.tar\.zst$' | sort | while read -r asset; do
+              pkg_base=$(echo "$asset" | sed 's/-[^-]*-[^-]*-[^-]*\.pkg\.tar\.zst$//')
+              echo "${pkg_base} ${asset}"
+            done | sort -t' ' -k1,1 -k2,2r | awk '{
+              if ($1 != prev) { count=0; prev=$1 }
+              count++
+              if (count > 1) print $2
+            }' | while read -r old; do
+              echo "Removing old asset: ${old}"
+              gh release delete-asset repository "$old" --repo "$GITHUB_REPOSITORY" --yes
+              # Also remove its signature if it exists
+              gh release delete-asset repository "${old}.sig" --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
+            done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
