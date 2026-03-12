@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - id: list
         run: |
-          echo "matrix=$(grep -v '^#' packages.txt | grep -v '^$' | jq -R -s -c 'split("\n") | map(select(. != ""))')" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(grep -v '^#' packages.txt | grep -v '^$' | jq -R -s -c 'split("\n") | map(select(. != "")) | map({group: ., name: split(" ")[0]})')" >> "$GITHUB_OUTPUT"
 
   build:
     needs: packages
@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: ${{ fromJson(needs.packages.outputs.matrix) }}
+        include: ${{ fromJson(needs.packages.outputs.matrix) }}
     steps:
       - name: Setup build environment
         run: |
@@ -44,19 +44,22 @@ jobs:
       - name: Check if build is needed
         id: check
         run: |
-          su builder -c "git clone --depth 1 https://aur.archlinux.org/${{ matrix.package }}.git /tmp/${{ matrix.package }}"
-          aur_ver=$(su builder -c "cd /tmp/${{ matrix.package }} && source PKGBUILD && echo \${epoch:+\${epoch}:}\${pkgver}-\${pkgrel}")
-          echo "version=${aur_ver}" >> "$GITHUB_OUTPUT"
-
           all_assets=$(gh release view repository --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>&1) || true
+          needed=false
 
-          if echo "$all_assets" | grep -qF "${{ matrix.package }}-${aur_ver}-"; then
-            echo "needed=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping ${{ matrix.package }}: version ${aur_ver} already built"
-          else
-            echo "needed=true" >> "$GITHUB_OUTPUT"
-            echo "Will build ${{ matrix.package }} version ${aur_ver}"
-          fi
+          for pkg in ${{ matrix.group }}; do
+            su builder -c "git clone --depth 1 https://aur.archlinux.org/${pkg}.git /tmp/${pkg}"
+            aur_ver=$(su builder -c "cd /tmp/${pkg} && source PKGBUILD && echo \${epoch:+\${epoch}:}\${pkgver}-\${pkgrel}")
+
+            if echo "$all_assets" | grep -qF "${pkg}-${aur_ver}-"; then
+              echo "Skipping ${pkg}: version ${aur_ver} already built"
+            else
+              echo "Will build ${pkg} version ${aur_ver}"
+              needed=true
+            fi
+          done
+
+          echo "needed=${needed}" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -85,8 +88,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /home/builder/.cache/ccache
-          key: ccache-${{ matrix.package }}-${{ github.run_id }}
-          restore-keys: ccache-${{ matrix.package }}-
+          key: ccache-${{ matrix.name }}-${{ github.run_id }}
+          restore-keys: ccache-${{ matrix.name }}-
 
       - name: Initialize ccache directory
         if: steps.check.outputs.needed == 'true'
@@ -94,15 +97,21 @@ jobs:
           mkdir -p /home/builder/.cache/ccache
           chown -R builder:builder /home/builder/.cache/ccache
 
-      - name: Build package
+      - name: Build packages
         if: steps.check.outputs.needed == 'true'
         run: |
-          su builder -c "cd /tmp/${{ matrix.package }} && makepkg -s --noconfirm"
+          mkdir -p /tmp/built-packages
+          for pkg in ${{ matrix.group }}; do
+            su builder -c "cd /tmp/${pkg} && makepkg -s --noconfirm"
+            # Install the built package so subsequent packages can depend on it
+            pacman -U --noconfirm /tmp/${pkg}/*.pkg.tar.zst
+            cp /tmp/${pkg}/*.pkg.tar.zst /tmp/built-packages/
+          done
 
-      - name: Sign package
+      - name: Sign packages
         if: steps.check.outputs.needed == 'true'
         run: |
-          for f in /tmp/${{ matrix.package }}/*.pkg.tar.zst; do
+          for f in /tmp/built-packages/*.pkg.tar.zst; do
             gpg --batch --yes --pinentry-mode loopback \
               --passphrase '${{ secrets.GPG_PASSPHRASE }}' \
               --detach-sign "$f"
@@ -112,10 +121,10 @@ jobs:
         if: steps.check.outputs.needed == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: pkg-${{ matrix.package }}
+          name: pkg-${{ matrix.name }}
           path: |
-            /tmp/${{ matrix.package }}/*.pkg.tar.zst
-            /tmp/${{ matrix.package }}/*.pkg.tar.zst.sig
+            /tmp/built-packages/*.pkg.tar.zst
+            /tmp/built-packages/*.pkg.tar.zst.sig
 
       - name: Print ccache stats
         if: always() && steps.check.outputs.needed == 'true'
