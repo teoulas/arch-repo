@@ -161,10 +161,10 @@ jobs:
           cd packages/
           repo-add --sign --key "$(gpg --list-secret-keys --keyid-format long | grep sec | awk '{print $2}' | cut -d/ -f2)" \
             teoulas.db.tar.gz *.pkg.tar.zst
-          cp teoulas.db.tar.gz teoulas.db
-          cp teoulas.db.tar.gz.sig teoulas.db.sig
-          cp teoulas.files.tar.gz teoulas.files
-          cp teoulas.files.tar.gz.sig teoulas.files.sig
+          cp --remove-destination teoulas.db.tar.gz teoulas.db
+          cp --remove-destination teoulas.db.tar.gz.sig teoulas.db.sig
+          cp --remove-destination teoulas.files.tar.gz teoulas.files
+          cp --remove-destination teoulas.files.tar.gz.sig teoulas.files.sig
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
