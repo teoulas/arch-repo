@@ -75,6 +75,8 @@ jobs:
           sed -i 's/-mtune=generic/-mtune=alderlake/' /etc/makepkg.conf
           # Set packager
           sed -i 's/#PACKAGER=.*/PACKAGER="Theodoros Orfanidis <teoulas@duck.com>"/' /etc/makepkg.conf
+          # Disable debug packages
+          sed -i 's/OPTIONS=(\(.*\)debug/OPTIONS=(\1!debug/' /etc/makepkg.conf
 
       - name: Import GPG key
         if: steps.check.outputs.needed == 'true'
