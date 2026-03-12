@@ -1,2 +1,4 @@
 llama.cpp-vulkan
 llama.cpp-hip
+whisper.cpp-vulkan
+whisper.cpp-hip
