@@ -91,7 +91,7 @@ jobs:
           key: ccache-${{ matrix.name }}-${{ github.run_id }}
           restore-keys: ccache-${{ matrix.name }}-
 
-      - name: Initialize ccache directory
+      - name: Fix ccache permissions
         if: steps.check.outputs.needed == 'true'
         run: |
           mkdir -p /home/builder/.cache/ccache
