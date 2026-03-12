@@ -70,6 +70,8 @@ jobs:
           # Optimize for Alder Lake (i7-12700)
           sed -i 's/-march=x86-64/-march=alderlake/' /etc/makepkg.conf
           sed -i 's/-mtune=generic/-mtune=alderlake/' /etc/makepkg.conf
+          # Set packager
+          sed -i 's/#PACKAGER=.*/PACKAGER="Theodoros Orfanidis <teoulas@duck.com>"/' /etc/makepkg.conf
 
       - name: Import GPG key
         if: steps.check.outputs.needed == 'true'
