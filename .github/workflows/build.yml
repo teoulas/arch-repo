@@ -104,6 +104,11 @@ jobs:
         run: |
           mkdir -p /tmp/built-packages
           for pkg in ${{ matrix.group }}; do
+            # Apply PKGBUILD overrides if they exist
+            if [ -f "overrides/${pkg}/PKGBUILD.append" ]; then
+              cat "overrides/${pkg}/PKGBUILD.append" >> "/tmp/${pkg}/PKGBUILD"
+              echo "Applied PKGBUILD.append override for ${pkg}"
+            fi
             su builder -c "cd /tmp/${pkg} && makepkg -s --noconfirm"
             # Install the built package so subsequent packages can depend on it
             pacman -U --noconfirm /tmp/${pkg}/*.pkg.tar.zst
