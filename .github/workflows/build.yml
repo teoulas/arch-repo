@@ -13,7 +13,7 @@ jobs:
     outputs:
       matrix: ${{ steps.list.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - id: list
         run: |
           echo "matrix=$(grep -v '^#' packages.txt | grep -v '^$' | jq -R -s -c 'split("\n") | map(select(. != "")) | map({group: ., name: split(" ")[0]})')" >> "$GITHUB_OUTPUT"
@@ -34,7 +34,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm git gnupg ccache github-cli
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Create build user
         run: |
@@ -87,7 +87,7 @@ jobs:
 
       - name: Restore ccache
         if: steps.check.outputs.needed == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /home/builder/.cache/ccache
           key: ccache-${{ matrix.name }}-${{ github.run_id }}
@@ -126,7 +126,7 @@ jobs:
 
       - name: Upload artifact
         if: steps.check.outputs.needed == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pkg-${{ matrix.name }}
           path: |
@@ -163,7 +163,7 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Download all package artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: pkg-*
           merge-multiple: true
@@ -185,7 +185,7 @@ jobs:
           cp --remove-destination teoulas.files.tar.gz.sig teoulas.files.sig
 
       - name: Upload to Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: repository
           files: |
